@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Walking a Triangle with Three Right Angles</title>
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;background:#05070d;color:#dfe7f5;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  #app{position:fixed;inset:0;}
+  canvas{display:block;}
+  #hud{position:absolute;top:14px;left:14px;max-width:330px;
+    background:rgba(12,18,30,.82);border:1px solid #28344e;border-radius:12px;
+    padding:14px 16px;backdrop-filter:blur(7px);}
+  #hud h1{font-size:15px;margin:0 0 4px;}
+  #hud p{font-size:12px;color:#93a0bb;margin:0 0 12px;line-height:1.5;}
+  .leg{font-size:12px;margin:5px 0;display:flex;gap:8px;align-items:center;color:#93a0bb;transition:color .2s;}
+  .leg.active{color:#ffd24d;font-weight:600;}
+  .leg .n{width:18px;height:18px;border-radius:50%;background:#28344e;color:#dfe7f5;
+    font-size:11px;display:flex;align-items:center;justify-content:center;flex:none;}
+  .leg.active .n{background:#ffd24d;color:#05070d;}
+  .ctrl{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;}
+  button{background:#1b2740;color:#dfe7f5;border:1px solid #28344e;border-radius:7px;
+    padding:6px 12px;cursor:pointer;font-size:12px;}
+  button:hover{border-color:#ffd24d;}
+  label{font-size:12px;color:#93a0bb;display:inline-flex;align-items:center;gap:6px;cursor:pointer;}
+  input[type=range]{accent-color:#ffd24d;width:90px;}
+  #angsum{margin-top:12px;font-size:12px;color:#93a0bb;border-top:1px solid #28344e;padding-top:10px;}
+  #angsum b{color:#ffd24d;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <h1>A triangle with three right angles</h1>
+  <p>On a sphere a triangle can have three 90° corners. Watch the walker trace it: down a meridian,
+     a quarter-turn along the equator, then back up.</p>
+  <div class="leg" data-leg="0"><span class="n">1</span> North Pole → Gulf of Guinea (down the Greenwich meridian)</div>
+  <div class="leg" data-leg="1"><span class="n">2</span> Quarter-turn west along the equator → E. Pacific</div>
+  <div class="leg" data-leg="2"><span class="n">3</span> Turn again, up the 90°W meridian → back to the Pole</div>
+  <div class="ctrl">
+    <button id="replay">↻ Replay</button>
+    <label>speed <input type="range" id="speed" min="0.4" max="2.5" step="0.1" value="1"></label>
+  </div>
+  <div class="ctrl">
+    <label><input type="checkbox" id="grid" checked> grid</label>
+    <label><input type="checkbox" id="rotate"> auto-rotate</label>
+    <label><input type="checkbox" id="marks" checked> 90° marks</label>
+  </div>
+  <div id="angsum">angle sum = <b>270°</b> &nbsp;·&nbsp; spherical excess = <b>90°</b></div>
+</div>
+
+<script type="importmap">
+{ "imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const R = 1;
+
+/* ---------------- scene ---------------- */
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+camera.position.set(2.3, 1.7, 2.6);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+app.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.minDistance = 1.5; controls.maxDistance = 12;
+controls.autoRotateSpeed = 0.8;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(5,3,4); scene.add(sun);
+
+// starfield
+(function stars(){
+  const g=new THREE.BufferGeometry(), n=1500, p=[];
+  for(let i=0;i<n;i++){
+    const v=new THREE.Vector3(Math.random()-.5,Math.random()-.5,Math.random()-.5).normalize().multiplyScalar(60+Math.random()*30);
+    p.push(v.x,v.y,v.z);
+  }
+  g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9fb4dd,size:0.18,sizeAttenuation:true,transparent:true,opacity:.8})));
+})();
+
+/* ---------------- globe ----------------
+   Procedural Earth (oceans + continents + ice) so it always looks like Earth,
+   then upgraded to a real blue-marble photo when the network allows. */
+const W=2048, H=1024;
+const proj=(lon,lat)=>[ (lon+180)/360*W, (90-lat)/180*H ];
+
+// simplified continent outlines [lon,lat]
+const LAND = [
+ [[-168,65],[-158,71],[-130,70],[-102,70],[-82,68],[-78,62],[-64,60],[-56,52],[-66,47],[-70,42],[-75,37],[-81,31],[-90,29],[-97,26],[-107,23],[-105,30],[-114,31],[-122,37],[-124,42],[-124,48],[-130,54],[-140,59],[-156,60]],            // N America
+ [[-45,60],[-30,64],[-20,70],[-18,78],[-30,83],[-50,82],[-58,76],[-53,68]],                                                                                                                                                              // Greenland
+ [[-80,9],[-72,11],[-60,8],[-50,0],[-44,-3],[-35,-7],[-39,-14],[-48,-25],[-58,-34],[-66,-42],[-72,-50],[-74,-52],[-71,-43],[-71,-30],[-76,-14],[-81,-5],[-80,3]],                                                                          // S America
+ [[-17,15],[-16,21],[-9,30],[0,36],[10,37],[20,33],[32,31],[35,24],[43,12],[51,12],[48,2],[42,-4],[40,-12],[35,-22],[27,-32],[20,-35],[16,-29],[12,-17],[9,-2],[5,5],[-4,5],[-12,8]],                                                       // Africa
+ [[-10,36],[-9,44],[2,51],[8,54],[5,59],[12,65],[24,71],[28,70],[40,66],[55,68],[68,73],[90,75],[110,77],[130,73],[142,73],[160,69],[180,66],[180,55],[160,60],[143,53],[135,47],[127,40],[122,40],[121,32],[120,24],[108,15],[103,1],[100,8],[94,16],[88,21],[80,13],[73,16],[70,20],[60,25],[50,40],[44,40],[36,36],[28,41],[24,40],[19,40],[13,45],[3,43],[-2,40]], // Eurasia
+ [[114,-22],[122,-18],[130,-12],[137,-12],[142,-11],[146,-18],[150,-24],[153,-28],[150,-37],[143,-39],[135,-35],[129,-32],[120,-34],[115,-34],[114,-26]],                                                                                  // Australia
+];
+const DESERTS = [ [12,22,26,11], [45,22,12,9], [132,-25,16,8], [-105,30,9,6], [70,40,16,7] ]; // [lon,lat,rx,ry] in deg
+
+function makeEarth(){
+  const col=document.createElement('canvas'); col.width=W; col.height=H;
+  const cx=col.getContext('2d');
+  // ocean gradient
+  const g=cx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#06203f'); g.addColorStop(.5,'#0f5390'); g.addColorStop(1,'#06203f');
+  cx.fillStyle=g; cx.fillRect(0,0,W,H);
+  // continents
+  const drawPoly=(pts,fill)=>{ cx.beginPath(); pts.forEach((p,i)=>{const[x,y]=proj(p[0],p[1]); i?cx.lineTo(x,y):cx.moveTo(x,y);}); cx.closePath(); cx.fillStyle=fill; cx.fill(); };
+  LAND.forEach(c=>drawPoly(c,'#3f7a36'));
+  // coastlines
+  cx.lineWidth=3; cx.strokeStyle='#2b5a27';
+  LAND.forEach(c=>{ cx.beginPath(); c.forEach((p,i)=>{const[x,y]=proj(p[0],p[1]); i?cx.lineTo(x,y):cx.moveTo(x,y);}); cx.closePath(); cx.stroke(); });
+  // deserts
+  DESERTS.forEach(([lo,la,rx,ry])=>{ const[x,y]=proj(lo,la); cx.save(); cx.beginPath();
+    cx.ellipse(x,y,rx/360*W,ry/180*H,0,0,Math.PI*2); cx.fillStyle='rgba(196,164,92,.85)'; cx.fill(); cx.restore(); });
+  // ice caps
+  cx.fillStyle='#eaf2f8'; cx.fillRect(0,0,W,H*0.055); cx.fillRect(0,H*0.94,W,H*0.06);
+  // roughness: ocean glossy, land matte
+  const rg=document.createElement('canvas'); rg.width=W; rg.height=H;
+  const rx2=rg.getContext('2d'); rx2.fillStyle='#3a3a3a'; rx2.fillRect(0,0,W,H);   // ocean ~0.23
+  rx2.fillStyle='#e0e0e0'; LAND.forEach(c=>{ rx2.beginPath(); c.forEach((p,i)=>{const[x,y]=proj(p[0],p[1]); i?rx2.lineTo(x,y):rx2.moveTo(x,y);}); rx2.closePath(); rx2.fill(); });
+  rx2.fillStyle='#cfcfcf'; rx2.fillRect(0,0,W,H*0.055); rx2.fillRect(0,H*0.94,W,H*0.06);
+  const ct=new THREE.CanvasTexture(col); ct.colorSpace=THREE.SRGBColorSpace; ct.anisotropy=8;
+  const rt=new THREE.CanvasTexture(rg);
+  return {colorTex:ct, roughTex:rt};
+}
+const earthTex = makeEarth();
+
+const globeMat = new THREE.MeshStandardMaterial({
+  map:earthTex.colorTex, roughnessMap:earthTex.roughTex, roughness:1.0, metalness:0.0 });
+const globe = new THREE.Mesh(new THREE.SphereGeometry(R,96,72), globeMat);
+scene.add(globe);
+
+// upgrade to a real photo when online (CORS-friendly hosts, with fallbacks)
+(function upgradeEarth(){
+  const loader=new THREE.TextureLoader();
+  const maxA=renderer.capabilities.getMaxAnisotropy();
+  const photos=[
+    'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
+    'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg',
+    'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg'
+  ];
+  let i=0;
+  const tryNext=()=>{ if(i>=photos.length) return;
+    loader.load(photos[i],
+      tex=>{ tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=maxA;
+             globeMat.map=tex; globeMat.roughnessMap=null; globeMat.roughness=0.88; globeMat.needsUpdate=true; },
+      undefined, ()=>{ i++; tryNext(); });
+  };
+  tryNext();
+  // surface relief (bump) — optional, ignored if it fails
+  loader.load('https://unpkg.com/three-globe/example/img/earth-topology.png',
+    tex=>{ globeMat.bumpMap=tex; globeMat.bumpScale=0.012; globeMat.needsUpdate=true; }, undefined, ()=>{});
+})();
+
+// drifting cloud layer
+let cloudMesh=null;
+(function clouds(){
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const x=c.getContext('2d');
+  for(let k=0;k<140;k++){
+    const px=Math.random()*W, py=H*0.12+Math.random()*H*0.76, r=20+Math.random()*70;
+    const rad=x.createRadialGradient(px,py,0,px,py,r);
+    rad.addColorStop(0,`rgba(255,255,255,${0.35+Math.random()*0.4})`); rad.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=rad; x.beginPath(); x.arc(px,py,r,0,Math.PI*2); x.fill();
+  }
+  const t=new THREE.CanvasTexture(c);
+  cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(R*1.015,64,48),
+    new THREE.MeshStandardMaterial({map:t,transparent:true,opacity:0.55,depthWrite:false,roughness:1}));
+  scene.add(cloudMesh);
+})();
+
+// atmosphere glow
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(R*1.07,64,48),
+  new THREE.MeshBasicMaterial({color:0x4a9bff, transparent:true, opacity:0.13, side:THREE.BackSide})));
+
+// lat/long grid
+const grid = new THREE.LineSegments(
+  new THREE.WireframeGeometry(new THREE.SphereGeometry(R*1.002,24,16)),
+  new THREE.LineBasicMaterial({color:0x6fa8ff, transparent:true, opacity:0.22}));
+scene.add(grid);
+
+/* ---------------- triangle geometry ---------------- */
+// vertices: north pole, equator@lon0, equator@lon90  → three 90° angles (an octant)
+const N = new THREE.Vector3(0,1,0);
+const A = new THREE.Vector3(1,0,0);
+const B = new THREE.Vector3(0,0,1);
+
+function slerp(p1,p2,t){
+  const d=Math.min(1,Math.max(-1,p1.dot(p2))), om=Math.acos(d);
+  if(om<1e-6) return p1.clone();
+  const s=Math.sin(om);
+  return p1.clone().multiplyScalar(Math.sin((1-t)*om)/s).add(p2.clone().multiplyScalar(Math.sin(t*om)/s));
+}
+function arc(p,q,n,arr,includeFirst){
+  for(let i=includeFirst?0:1;i<=n;i++) arr.push(slerp(p,q,i/n).multiplyScalar(R));
+}
+// full path: N→A→B→N
+const pts=[]; arc(N,A,100,pts,true); arc(A,B,100,pts,false); arc(B,N,100,pts,false);
+const legBounds=[0, 100, 200, 300];           // index ranges per leg
+
+const curve = new THREE.CatmullRomCurve3(pts);
+const TUBE_SEG = pts.length-1;
+const tubeGeo = new THREE.TubeGeometry(curve, TUBE_SEG, 0.012, 10, false);
+const trail = new THREE.Mesh(tubeGeo, new THREE.MeshStandardMaterial({
+  color:0xffd24d, emissive:0xffa500, emissiveIntensity:0.6, roughness:0.4, metalness:0.2}));
+scene.add(trail);
+const tubeIndexCount = tubeGeo.index.count;
+trail.geometry.setDrawRange(0,0);
+
+// curved filled triangle (shown once the walk completes) -------------------
+function triGeometry(V,lift,M=26){
+  const pos=[],idx=[],g=[];
+  for(let i=0;i<=M;i++){g[i]=[];for(let j=0;j<=i;j++){
+    const w0=1-i/M, w2=j/M, w1=(i-j)/M;
+    const p=new THREE.Vector3().addScaledVector(V[0],w0).addScaledVector(V[1],w1).addScaledVector(V[2],w2)
+            .normalize().multiplyScalar(lift);
+    g[i][j]=pos.length/3; pos.push(p.x,p.y,p.z);
+  }}
+  for(let i=1;i<=M;i++)for(let j=0;j<i;j++){
+    idx.push(g[i][j],g[i][j+1],g[i-1][j]);
+    if(j<i-1) idx.push(g[i][j+1],g[i-1][j+1],g[i-1][j]);
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setIndex(idx); geo.computeVertexNormals(); return geo;
+}
+const fillMat = new THREE.MeshBasicMaterial({color:0xffd24d, transparent:true, opacity:0, side:THREE.DoubleSide, depthWrite:false});
+const fill = new THREE.Mesh(triGeometry([N,A,B],R*1.006), fillMat);
+scene.add(fill);
+
+/* ---------------- 90° corner markers ---------------- */
+const markGroup = new THREE.Group(); scene.add(markGroup);
+function tangentAt(from,to){ return to.clone().addScaledVector(from,-to.dot(from)).normalize(); }
+function rightAngleMark(V, d1, d2, size){
+  // little square bracket lying on the surface, showing the 90° corner
+  const pA = V.clone().addScaledVector(d1,size);
+  const pB = V.clone().addScaledVector(d1,size).addScaledVector(d2,size);
+  const pC = V.clone().addScaledVector(d2,size);
+  const proj=p=>p.normalize().multiplyScalar(R*1.004);
+  const geo=new THREE.BufferGeometry().setFromPoints([proj(pA),proj(pB.clone()),proj(pC)]);
+  markGroup.add(new THREE.Line(geo,new THREE.LineBasicMaterial({color:0xffffff})));
+}
+rightAngleMark(N, tangentAt(N,A), tangentAt(N,B), 0.09);
+rightAngleMark(A, tangentAt(A,N), tangentAt(A,B), 0.09);
+rightAngleMark(B, tangentAt(B,A), tangentAt(B,N), 0.09);
+
+// "90°" labels
+function label(text,pos){
+  const c=document.createElement('canvas'); c.width=c.height=128;
+  const x=c.getContext('2d'); x.fillStyle='#ffd24d'; x.font='bold 60px system-ui';
+  x.textAlign='center'; x.textBaseline='middle'; x.fillText(text,64,64);
+  const t=new THREE.CanvasTexture(c);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));
+  sp.position.copy(pos.clone().normalize().multiplyScalar(R*1.18)); sp.scale.setScalar(0.22);
+  markGroup.add(sp);
+}
+label('90°', N.clone().add(new THREE.Vector3(0.18,0,0.18)));
+label('90°', A.clone().add(new THREE.Vector3(0,0.16,0.12)));
+label('90°', B.clone().add(new THREE.Vector3(0.12,0.16,0)));
+
+/* ---------------- location pins ---------------- */
+function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function makePin(hex){
+  const grp=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:hex,roughness:.35,metalness:.25,emissive:hex,emissiveIntensity:.3});
+  const cone=new THREE.Mesh(new THREE.ConeGeometry(0.03,0.08,20),mat); cone.rotation.x=Math.PI; cone.position.y=0.04; // tip on surface
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.033,20,16),mat); head.position.y=0.10;
+  const dot=new THREE.Mesh(new THREE.SphereGeometry(0.013,12,10),
+    new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:.4})); dot.position.set(0,0.10,0.026);
+  grp.add(cone,head,dot); return grp;
+}
+function pinLabel(title,sub,hex){
+  const c=document.createElement('canvas'); c.width=440; c.height=150; const x=c.getContext('2d');
+  x.fillStyle='rgba(10,16,28,.85)'; roundRect(x,4,4,432,142,18); x.fill();
+  x.strokeStyle=hex; x.lineWidth=4; roundRect(x,4,4,432,142,18); x.stroke();
+  x.textAlign='center'; x.fillStyle='#ffffff'; x.font='bold 44px system-ui'; x.fillText(title,220,58);
+  x.fillStyle='#9fb0cc'; x.font='28px system-ui'; x.fillText(sub,220,106);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
+  sp.scale.set(0.52,0.52*150/440,1); sp.position.set(0,0.34,0); return sp;
+}
+const pinDefs=[
+  {v:N, hex:0x36d36f, title:'START · North Pole', sub:'90° N'},
+  {v:A, hex:0xff5d5d, title:'Gulf of Guinea',      sub:'~0° N, 0° E · off W. Africa'},
+  {v:B, hex:0x4db8ff, title:'E. Pacific',          sub:'~0° N, 90° W · near Galápagos'},
+];
+const pins = pinDefs.map(d=>{
+  const g=makePin(d.hex);
+  g.position.copy(d.v.clone().multiplyScalar(R));
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d.v.clone().normalize());
+  g.add(pinLabel(d.title,d.sub,'#'+d.hex.toString(16).padStart(6,'0')));
+  g.scale.setScalar(0); scene.add(g); return g;
+});
+const clamp01=x=>Math.max(0,Math.min(1,x));
+const easeOutBack=x=>{ const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2); };
+
+/* ---------------- the walker ---------------- */
+function makeMan(){
+  const g=new THREE.Group();
+  const skin=new THREE.MeshStandardMaterial({color:0xf2c9a0,roughness:.7});
+  const shirt=new THREE.MeshStandardMaterial({color:0xe8483b,roughness:.6});
+  const pants=new THREE.MeshStandardMaterial({color:0x2b3a67,roughness:.7});
+  const S=1.0; // overall scale of feature sizes below (already small)
+  // body
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(0.016,0.045,4,8),shirt); body.position.y=0.075; g.add(body);
+  // head
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.019,16,12),skin); head.position.y=0.115; g.add(head);
+  // arms (pivot at shoulders)
+  const mkLimb=(mat,len,w)=>{ const grp=new THREE.Group();
+    const m=new THREE.Mesh(new THREE.CapsuleGeometry(w,len,4,6),mat); m.position.y=-len/2-w; grp.add(m); return grp; };
+  const armL=mkLimb(skin,0.04,0.007), armR=mkLimb(skin,0.04,0.007);
+  armL.position.set(-0.022,0.10,0); armR.position.set(0.022,0.10,0); g.add(armL,armR);
+  // legs (pivot at hips)
+  const legL=mkLimb(pants,0.05,0.009), legR=mkLimb(pants,0.05,0.009);
+  legL.position.set(-0.009,0.052,0); legR.position.set(0.009,0.052,0); g.add(legL,legR);
+  g.userData={armL,armR,legL,legR};
+  return g;
+}
+const man = makeMan(); scene.add(man);
+
+const _up=new THREE.Vector3(), _fwd=new THREE.Vector3(), _right=new THREE.Vector3(), _m=new THREE.Matrix4();
+function placeMan(u, swing){
+  const pos = curve.getPointAt(u).normalize().multiplyScalar(R);
+  const tan = curve.getTangentAt(u);
+  _up.copy(pos).normalize();
+  _fwd.copy(tan).addScaledVector(_up,-tan.dot(_up)).normalize();   // forward ⟂ up
+  _right.copy(_up).cross(_fwd).normalize();
+  _m.makeBasis(_right,_up,_fwd);
+  man.position.copy(pos);
+  man.quaternion.setFromRotationMatrix(_m);
+  // walking gait
+  const s=Math.sin(swing)*0.7, ud=man.userData;
+  ud.legL.rotation.x= s;  ud.legR.rotation.x=-s;
+  ud.armL.rotation.x=-s;  ud.armR.rotation.x= s;
+}
+
+/* ---------------- animation state machine ---------------- */
+let duration = 12;            // seconds for the full walk (scaled by speed slider)
+let speed = 1, t = 0, phase='intro', introT=0, holdT=0;
+const legEls=[...document.querySelectorAll('.leg')];
+
+function setActiveLeg(idx){ legEls.forEach((e,i)=>e.classList.toggle('active', i===idx && phase==='walk')); }
+
+function reset(){ t=0; phase='intro'; introT=0; holdT=0; trail.geometry.setDrawRange(0,0); fillMat.opacity=0;
+  placeMan(0,0); pins.forEach(p=>p.scale.setScalar(0)); setActiveLeg(-1); }
+
+const clock = new THREE.Clock();
+function tick(){
+  const dt = clock.getDelta();
+  if(phase==='intro'){                       // pins pop in (staggered), then walk begins
+    introT += dt;
+    pins.forEach((p,i)=>p.scale.setScalar(Math.max(0,easeOutBack(clamp01((introT - i*0.45)/0.5)))));
+    placeMan(0,0);
+    if(introT > 1.9) phase='walk';
+  } else if(phase==='walk'){
+    t += dt*speed/duration;
+    if(t>=1){ t=1; phase='hold'; holdT=0; }
+    const u=Math.min(t,1);
+    placeMan(u, performance.now()*0.012*speed);
+    const seg=Math.floor(u*TUBE_SEG);
+    trail.geometry.setDrawRange(0, Math.floor((seg/TUBE_SEG)*tubeIndexCount));
+    // which leg are we on?
+    const gi=Math.min(2, Math.floor(u*3 - 1e-6)); setActiveLeg(gi);
+  } else if(phase==='hold'){
+    holdT += dt;
+    fillMat.opacity = Math.min(0.5, fillMat.opacity + dt*0.8);
+    setActiveLeg(-1);
+    if(holdT>3.2) reset();
+  }
+  if(cloudMesh) cloudMesh.rotation.y += dt*0.012;   // gentle cloud drift
+  controls.update();
+  renderer.render(scene,camera);
+}
+
+/* ---------------- UI ---------------- */
+document.getElementById('replay').onclick = reset;
+document.getElementById('speed').oninput = e=>{ speed=+e.target.value; };
+document.getElementById('grid').onchange = e=>grid.visible=e.target.checked;
+document.getElementById('marks').onchange = e=>markGroup.visible=e.target.checked;
+document.getElementById('rotate').onchange = e=>controls.autoRotate=e.target.checked;
+
+function resize(){ const w=app.clientWidth,h=app.clientHeight; renderer.setSize(w,h);
+  camera.aspect=w/h; camera.updateProjectionMatrix(); }
+window.addEventListener('resize',resize); resize();
+
+reset();
+renderer.setAnimationLoop(tick);
+</script>
+</body>
+</html>
